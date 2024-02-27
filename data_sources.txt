@@ -1,0 +1,3 @@
+Data Sources:
+https://www.kaggle.com/datasets/nelgiriyewithana/emotions
+https://www.kaggle.com/datasets/mdismielhossenabir/sentiment-analysis

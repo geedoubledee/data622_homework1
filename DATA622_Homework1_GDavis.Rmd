@@ -1,0 +1,76 @@
+---
+title: "DATA 622 - Homework 1"
+author: "Glen Dale Davis"
+date: "2024-03-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Packages
+
+```{r packages, warning = FALSE, message = FALSE}
+library(tidyverse)
+
+```
+
+## Introduction
+
+We load two labeled text datasets:
+
+* one small dataset, in which social media messages from Twitter, Facebook, and Instagram have been classified as positive, negative, or neutral
+
+* one large dataset, in which Twitter messages have been classified as primarily conveying one of six emotions: sadness, joy, love, anger, fear, and surprise
+
+While the only feature in the large dataset is the text of the message itself, the small dataset has additional features related to the time and date the message was sent, as well as the platform used to send it since the small dataset covers more social media platforms than the large dataset. 
+
+```{r data1}
+my_url1 <- "https://raw.githubusercontent.com/geedoubledee/data622_homework1/main/sentiment_analysis.csv"
+small_df <- read.csv(my_url1)
+cols <- c("year", "month", "day", "time", "txt", "sentiment", "platform")
+colnames(small_df) <- cols
+char_cols <- colnames(small_df[, sapply(small_df, class) == "character"])
+small_df_sub1 <- small_df |>
+    select(-all_of(char_cols))
+small_df_sub2 <- small_df |>
+    select(all_of(char_cols)) |>
+    sapply(str_trim) |>
+    as.data.frame()
+small_df <- small_df_sub1 |>
+    bind_cols(small_df_sub2)
+
+```
+
+```{r data2}
+my_url2 <- "https://raw.githubusercontent.com/geedoubledee/data622_homework1/main/text_pt_"
+x <- seq(1, 9)
+y <- rep(".csv", 9)
+files <- paste0(x, y)
+cols <- c("txt", "lab")
+large_df <- as.data.frame(matrix(nrow = 0, ncol = 2))
+colnames(large_df) <- cols
+large_df <- large_df |>
+    mutate(txt = as.character(txt),
+           lab = as.integer(lab))
+for (f in files){
+    new_rows <- read.csv(paste0(my_url2, f))
+    colnames(new_rows) <- cols
+    large_df <- large_df |>
+        bind_rows(new_rows)
+}
+rm(new_rows)
+my_url3 <- "https://raw.githubusercontent.com/geedoubledee/data622_homework1/main/text_label_map.csv"
+txt_lab_map <- read.csv(my_url3)
+cols <- c("key", "val")
+colnames(txt_lab_map) <- cols
+large_df <- large_df |>
+    left_join(txt_lab_map, by = join_by(lab == key),
+              relationship = "many-to-one")
+
+```
+
+## Analysis
+
+## Conclusion

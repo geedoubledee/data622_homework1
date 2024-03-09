@@ -31,7 +31,7 @@ We load two labeled text datasets of very different sizes, which we will use to 
 
 * In the large dataset, Twitter messages have been classified as primarily conveying one of six emotions: sadness, joy, love, anger, fear, and surprise; our response variable for this dataset will be `EMOTION`
 
-While the only feature in the large dataset is the text of the message itself, the small dataset has additional features related to the time and date the message was sent, as well as the platform used to send it since the small dataset covers more social media platforms than the large dataset. 
+While the only feature in the large dataset is the text of the message itself, the small dataset has additional features related to the time and date the message was sent, as well as the platform used to send it since the small dataset covers more social media platforms than the large dataset. For the sake of simplicity and comparison later, we will only train models on the text features. 
 
 ## Exploratory Data Analysis
 
@@ -60,11 +60,9 @@ introduce <- small_df |>
     introduce() |>
     select(-all_of(remove))
 introduce <- introduce[, reorder]
-knitr::kable(t(introduce), format = "simple")
+knitr::kable(t(introduce), format = "simple", caption = "A summary introduction to the small dataset.")
 
 ```
-
-There are less than 500 observations in the small dataset. 
 
 ```{r data2}
 my_url2 <- "https://raw.githubusercontent.com/geedoubledee/data622_homework1/main/text_pt_"
@@ -101,11 +99,13 @@ introduce <- large_df |>
     introduce() |>
     select(-all_of(remove))
 introduce <- introduce[, reorder]
-knitr::kable(t(introduce), format = "simple")
+knitr::kable(t(introduce), format = "simple", caption = "A summary introduction to the large dataset.")
 
 ```
 
-And there are over 400,000 observations in the large dataset. There are no missing values to address in either dataset, so now we take a look at the distributions of our response variables:
+There are less than 500 observations in the small dataset and over 400,000 observations in the large dataset. There are no missing values to address in either dataset.
+
+Next we take a look at the distributions of our response variables:
 
 * `SENTIMENT` in the small dataset
 
@@ -138,7 +138,8 @@ In the small dataset, the most frequent `SENTIMENT` class is neutral, followed b
 
 ```{r plot2, warning = FALSE, message = FALSE}
 cols <- palette1[1:6]
-names(cols) <- c("sadness", "joy", "love", "anger", "fear", "surprise")
+emotions <- c("sadness", "joy", "love", "anger", "fear", "surprise")
+names(cols) <- emotions
 fils <- cols
 obs <- nrow(large_df)
 p2 <- large_df |>
@@ -159,9 +160,11 @@ p2
 
 In the large dataset, we see a worse class imbalance issue. Joy is the most frequent `EMOTION` in the large dataset, and it occurs nearly 10 times as often as the least frequent `EMOTION`: surprise. This will affect the predictive power of some of the models we'll be developing since we again can't use SMOTE to correct the issue, but one of the models is actually well suited for overcoming it. 
 
+Now we are ready to tokenize our data for text analysis, creating the word features our models will use to predict sentiment and emotion.
+
 ## Data Preparation
 
-For text analysis, we need to tokenize our data. 
+First, we split the text variable in each dataset into its word components, then any punctuation, numbers, or stopwords are removed. Next, we pivot the word variable we've just created into a boolean matrix with all the words recorded in the text as columns. Within said matrix, a value of 1 indicates a word appears in that text and a value of 0 indicates it does not.
 
 ```{r tokenization1}
 small_df_tokens <- small_df |>
@@ -172,15 +175,53 @@ small_df_tokens <- small_df |>
                 values_fn = list(WORD = length), values_fill = list(WORD = 0))
 small_df <- small_df |>
     left_join(small_df_tokens, by = join_by(ID))
+large_df_tokens <- large_df |>
+    unnest_tokens(output = WORD, input = TXT, strip_punct = TRUE) |>
+    anti_join(stop_words, by = join_by(WORD == word)) |>
+    filter(!grepl('[0-9]', WORD))
+words <- unique(large_df_tokens$WORD)
+new_cols <- as.data.frame(matrix(data = 0, nrow = nrow(large_df_tokens),
+                                 ncol = length(words)))
+colnames(new_cols) <- words
+large_df_tokens <- large_df_tokens |>
+    bind_cols(new_cols)
+
+```
+
+We could go further by combining singular and plural versions of the same noun or the various tenses of the same verb into one token. We could also attempt to correct for misspellings. However, the text features as they are now will be sufficient for training our models.
+
+The tokenization process has resulted in some observations having `NA` values for all recorded words. This is because they were composed entirely of stopwords and/or numbers. So we replace these `NA` values with 0. 
+
+```{r tokenization2}
 small_df[is.na(small_df)] <- 0
 
 ```
 
-```{r tokenization2}
+We remove any feature variables other than our word tokens. 
+
+```{r }
+remove <- c("ID", "YEAR", "MONTH", "DAY", "TIME", "TXT", "PLATFORM")
+small_df <- small_df |>
+    select(-all_of(remove))
+remove <- c("ID", "TXT", "LAB")
+large_df <- large_df |>
+    select(-all_of(remove))
 
 ```
 
-## Modeling
+We split the datasets into a series of training and test sets so that we can later perform k-fold cross-validation when training our models.
+
+```{r }
+set.seed(1006)
+sample_set <- createDataPartition(y = small_df$SENTIMENT, p = 0.75, list = FALSE)
+small_df_train <- small_df[sample_set, ]
+small_df_test <- small_df[-sample_set, ]
+
+```
+
+Next, we train our models. 
+
+## Model Development
 
 ```{r modeling1}
 
@@ -189,5 +230,9 @@ small_df[is.na(small_df)] <- 0
 ```{r modeling2}
 
 ```
+
+## Model Selection
+
+## Final Evaluation
 
 ## Conclusion

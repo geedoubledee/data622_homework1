@@ -15,6 +15,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(caret)
 library(DataExplorer)
 library(knitr)
+library(Matrix)
 library(naniar)
 library(RColorBrewer)
 library(stopwords)
@@ -82,12 +83,15 @@ for (f in files){
         bind_rows(new_rows)
 }
 large_df <- large_df |>
-    rowid_to_column(var = "ID")
+    rowid_to_column(var = "ID") |>
+    mutate(LAB = LAB + 1)
 rm(new_rows)
 my_url3 <- "https://raw.githubusercontent.com/geedoubledee/data622_homework1/main/text_label_map.csv"
 txt_lab_map <- read.csv(my_url3)
 cols <- c("KEY", "EMOTION")
 colnames(txt_lab_map) <- cols
+txt_lab_map <- txt_lab_map |>
+    mutate(KEY = KEY + 1)
 large_df <- large_df |>
     left_join(txt_lab_map, by = join_by(LAB == KEY),
               relationship = "many-to-one")
@@ -164,7 +168,19 @@ Now we are ready to tokenize our data for text analysis, creating the word featu
 
 ## Data Preparation
 
-First, we split the text variable in each dataset into its word components, then any punctuation, numbers, or stopwords are removed. Next, we pivot the word variable we've just created into a boolean matrix with all the words recorded in the text as columns. Within said matrix, a value of 1 indicates a word appears in that text and a value of 0 indicates it does not.
+First, we remove some non-text feature variables from the small dataset that we won't be using to train our models.
+
+```{r }
+remove <- c("YEAR", "MONTH", "DAY", "TIME", "PLATFORM")
+small_df <- small_df |>
+    select(-all_of(remove))
+
+```
+
+Then we split the text variable in each dataset into its word components, then any punctuation, numbers, or stopwords are removed. We could go further by combining singular and plural versions of the same noun or the various tenses of the same verb into one token. We could also attempt to correct for misspellings. However, the text features as they are now will be sufficient for training our models. We do implement a word frequency cut-off for the large dataset, as its massive number of observations results in nearly 75,000 unique words. Removing words that only occur once in the corpus cuts the number of unique words by a little less than half, making the corpus more manageable. We don't implement this cut-off for the small dataset, as it's unnecessary. 
+
+Finally, we pivot the `WORD` variable we've just created into boolean matrices with all the words recorded in the text as columns. Within said matrices, values of 1 indicate a word appears in that text, and values of 0 indicate it does not. For the small dataset, we can store this data as part of its original dataframe, but for the large dataset, we have to compress this data into a sparse matrix or we run into a memory issue.
+
 
 ```{r tokenization1}
 small_df_tokens <- small_df |>
@@ -179,33 +195,34 @@ large_df_tokens <- large_df |>
     unnest_tokens(output = WORD, input = TXT, strip_punct = TRUE) |>
     anti_join(stop_words, by = join_by(WORD == word)) |>
     filter(!grepl('[0-9]', WORD))
-words <- unique(large_df_tokens$WORD)
-new_cols <- as.data.frame(matrix(data = 0, nrow = nrow(large_df_tokens),
-                                 ncol = length(words)))
-colnames(new_cols) <- words
+large_df_tokens_summary <- large_df_tokens |>
+    group_by(WORD) |>
+    summarize(total = n())
+low_freq <- large_df_tokens_summary[large_df_tokens_summary$total == 1, 1]
+low_freq <- as.character(low_freq$WORD)
 large_df_tokens <- large_df_tokens |>
-    bind_cols(new_cols)
+    filter(!WORD %in% low_freq)
+large_df_tokens <- large_df_tokens |>
+    add_column(COUNT = 1)
+large_df_sparse_matrix <- large_df_tokens |>
+    cast_sparse(ID, WORD, COUNT)
+sel <- c("ID", "LAB")
+labels <- large_df_tokens |>
+    select(all_of(sel)) |>
+    distinct() |>
+    rename(EMOTION = LAB) |>
+    column_to_rownames(var = "ID") |>
+    as.matrix() |>
+    as("dgCMatrix")
+large_df_sparse_matrix <- cbind(large_df_sparse_matrix, labels)
+rm(labels)
 
 ```
 
-We could go further by combining singular and plural versions of the same noun or the various tenses of the same verb into one token. We could also attempt to correct for misspellings. However, the text features as they are now will be sufficient for training our models.
-
-The tokenization process has resulted in some observations having `NA` values for all recorded words. This is because they were composed entirely of stopwords and/or numbers. So we replace these `NA` values with 0. 
+The tokenization process has resulted in some observations having `NA` values for all recorded words in their datasets. This is because they were composed entirely of stopwords and/or numbers. These observations were automatically removed when working with the large dataset, so we will remove them from the small dataset as well.
 
 ```{r tokenization2}
-small_df[is.na(small_df)] <- 0
-
-```
-
-We remove any feature variables other than our word tokens. 
-
-```{r }
-remove <- c("ID", "YEAR", "MONTH", "DAY", "TIME", "TXT", "PLATFORM")
-small_df <- small_df |>
-    select(-all_of(remove))
-remove <- c("ID", "TXT", "LAB")
-large_df <- large_df |>
-    select(-all_of(remove))
+small_df <- small_df[rowSums(is.na(small_df)) == 0, ] 
 
 ```
 

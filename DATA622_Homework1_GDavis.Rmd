@@ -16,27 +16,26 @@ library(caret)
 library(DataExplorer)
 library(knitr)
 library(Matrix)
+library(naivebayes)
 library(naniar)
 library(RColorBrewer)
+library(scales)
 library(stopwords)
 library(tidytext)
 library(tidyverse)
+library(xgboost)
 
 ```
 
 ## Introduction
 
-We load two labeled text datasets of very different sizes, which we will use to train three different models to classify text based on sentiment and emotion.
+We load two labeled text datasets of very different sizes, which we will use to train two different models to classify text based on sentiment and emotion.
 
 * In the small dataset, social media messages from Twitter, Facebook, and Instagram have been classified as primarily conveying positive, negative, or neutral sentiment; our response variable for this dataset will be `SENTIMENT`
 
 * In the large dataset, Twitter messages have been classified as primarily conveying one of six emotions: sadness, joy, love, anger, fear, and surprise; our response variable for this dataset will be `EMOTION`
 
 While the only feature in the large dataset is the text of the message itself, the small dataset has additional features related to the time and date the message was sent, as well as the platform used to send it since the small dataset covers more social media platforms than the large dataset. For the sake of simplicity and comparison later, we will only train models on the text features. 
-
-## Exploratory Data Analysis
-
-We look at summaries of the datasets to confirm the numbers of observations in each and whether there are any missing values to address. 
 
 ```{r data1}
 my_url1 <- "https://raw.githubusercontent.com/geedoubledee/data622_homework1/main/sentiment_analysis.csv"
@@ -53,19 +52,6 @@ small_df_sub2 <- small_df |>
 small_df <- small_df_sub1 |>
     bind_cols(small_df_sub2) |>
     rowid_to_column(var = "ID")
-remove <- c("total_observations", "memory_usage")
-reorder <- c("rows", "complete_rows", "columns", "discrete_columns",
-             "continuous_columns", "all_missing_columns",
-             "total_missing_values")
-introduce <- small_df |>
-    introduce() |>
-    select(-all_of(remove))
-introduce <- introduce[, reorder]
-knitr::kable(t(introduce), format = "simple", caption = "A summary introduction to the small dataset.")
-
-```
-
-```{r data2}
 my_url2 <- "https://raw.githubusercontent.com/geedoubledee/data622_homework1/main/text_pt_"
 x <- seq(1, 9)
 y <- rep(".csv", 9)
@@ -83,22 +69,36 @@ for (f in files){
         bind_rows(new_rows)
 }
 large_df <- large_df |>
-    rowid_to_column(var = "ID") |>
-    mutate(LAB = LAB + 1)
+    rowid_to_column(var = "ID")
 rm(new_rows)
 my_url3 <- "https://raw.githubusercontent.com/geedoubledee/data622_homework1/main/text_label_map.csv"
 txt_lab_map <- read.csv(my_url3)
 cols <- c("KEY", "EMOTION")
 colnames(txt_lab_map) <- cols
-txt_lab_map <- txt_lab_map |>
-    mutate(KEY = KEY + 1)
 large_df <- large_df |>
     left_join(txt_lab_map, by = join_by(LAB == KEY),
               relationship = "many-to-one")
+
+```
+
+## Exploratory Data Analysis
+
+We look at summaries of the datasets to confirm the numbers of observations in each and whether there are any missing values to address. 
+
+```{r summary1}
 remove <- c("total_observations", "memory_usage")
 reorder <- c("rows", "complete_rows", "columns", "discrete_columns",
              "continuous_columns", "all_missing_columns",
              "total_missing_values")
+introduce <- small_df |>
+    introduce() |>
+    select(-all_of(remove))
+introduce <- introduce[, reorder]
+knitr::kable(t(introduce), format = "simple", caption = "A summary introduction to the small dataset.")
+
+```
+
+```{r summary2}
 introduce <- large_df |>
     introduce() |>
     select(-all_of(remove))
@@ -138,7 +138,7 @@ p1
 
 ```
 
-In the small dataset, the most frequent `SENTIMENT` class is neutral, followed by positive, then negative. There are some slight class imbalances here, but since we'll be doing text analysis, our input variables will primarily be categorical, and using the SMOTE algorithm to fix unbalanced classification problems is therefore not recommended. None of the classes is so rare that we should be worried about the predictive power of any of the models we'll be developing.
+In the small dataset, the most frequent `SENTIMENT` class is neutral, followed by positive, then negative. There are some slight class imbalances here, but since we'll be doing text analysis, our input variables will primarily be categorical, and using the SMOTE algorithm to fix unbalanced classification problems is therefore not recommended. None of the classes is so rare that we should be too worried, but this issue combined with the small number of observations might affect the predictive power of our models.
 
 ```{r plot2, warning = FALSE, message = FALSE}
 cols <- palette1[1:6]
@@ -154,6 +154,7 @@ p2 <- large_df |>
               size = 4, color = "white", hjust = 1.1, fontface = "bold") + 
     scale_color_manual(values = cols) +
     scale_fill_manual(values = fils) +
+    scale_y_continuous(labels = scales::comma) +
     labs(title = "Distribution of EMOTION in the Large Dataset",
          y = "COUNT") +
     coord_flip() +
@@ -162,13 +163,13 @@ p2
 
 ```
 
-In the large dataset, we see a worse class imbalance issue. Joy is the most frequent `EMOTION` in the large dataset, and it occurs nearly 10 times as often as the least frequent `EMOTION`: surprise. This will affect the predictive power of some of the models we'll be developing since we again can't use SMOTE to correct the issue, but one of the models is actually well suited for overcoming it. 
+In the large dataset, we see a worse class imbalance issue. Joy is the most frequent `EMOTION` in the large dataset, and it occurs nearly 10 times as often as the least frequent `EMOTION`: surprise. This issue could again affect the predictive power of our models since we can't use SMOTE to correct it, but the sheer number of observations may allow our models to overcome it.
 
 Now we are ready to tokenize our data for text analysis, creating the word features our models will use to predict sentiment and emotion.
 
 ## Data Preparation
 
-First, we remove some non-text feature variables from the small dataset that we won't be using to train our models.
+To prepare the data, we first remove some non-text feature variables from the small dataset that we won't be using to train our models.
 
 ```{r }
 remove <- c("YEAR", "MONTH", "DAY", "TIME", "PLATFORM")
@@ -177,20 +178,15 @@ small_df <- small_df |>
 
 ```
 
-Then we split the text variable in each dataset into its word components, then any punctuation, numbers, or stopwords are removed. We could go further by combining singular and plural versions of the same noun or the various tenses of the same verb into one token. We could also attempt to correct for misspellings. However, the text features as they are now will be sufficient for training our models. We do implement a word frequency cut-off for the large dataset, as its massive number of observations results in nearly 75,000 unique words. Removing words that only occur once in the corpus cuts the number of unique words by a little less than half, making the corpus more manageable. We don't implement this cut-off for the small dataset, as it's unnecessary. 
+Then we split the text variable in each dataset into its word components, and any punctuation, numbers, or stopwords are removed. We could go further by combining singular and plural versions of the same noun or the various tenses of the same verb into one token. We could also attempt to correct for misspellings. However, the text features as they are now will be sufficient for training our models. We do implement a word frequency cut-off for the large dataset, as its massive number of observations results in nearly 75,000 unique words. Removing words that only occur once in the corpus cuts the number of unique words by a little less than half, making it more manageable. We don't implement this cut-off for the small dataset, as it is unnecessary. 
 
-Finally, we pivot the `WORD` variable we've just created into boolean matrices with all the words recorded in the text as columns. Within said matrices, values of 1 indicate a word appears in that text, and values of 0 indicate it does not. For the small dataset, we can store this data as part of its original dataframe, but for the large dataset, we have to compress this data into a sparse matrix or we run into a memory issue.
-
-
-```{r tokenization1}
+```{r tokenization}
 small_df_tokens <- small_df |>
     unnest_tokens(output = WORD, input = TXT, strip_punct = TRUE) |>
     anti_join(stop_words, by = join_by(WORD == word)) |>
-    filter(!grepl('[0-9]', WORD)) |>
-    pivot_wider(id_cols = ID, names_from = WORD, values_from = WORD,
-                values_fn = list(WORD = length), values_fill = list(WORD = 0))
-small_df <- small_df |>
-    left_join(small_df_tokens, by = join_by(ID))
+    filter(!grepl('[0-9]', WORD))
+small_df_tokens <- small_df_tokens |>
+    add_column(COUNT = 1)
 large_df_tokens <- large_df |>
     unnest_tokens(output = WORD, input = TXT, strip_punct = TRUE) |>
     anti_join(stop_words, by = join_by(WORD == word)) |>
@@ -204,52 +200,191 @@ large_df_tokens <- large_df_tokens |>
     filter(!WORD %in% low_freq)
 large_df_tokens <- large_df_tokens |>
     add_column(COUNT = 1)
-large_df_sparse_matrix <- large_df_tokens |>
+
+```
+
+Finally, we pivot the `WORD` variable we've just created into boolean matrices with all the words recorded in the text as columns. Within said matrices, values of 1 indicate a word appears in that text, and values of 0 indicate it does not. For the small dataset, we could store this data as part of its original dataframe, but for the large dataset, we have to compress this data into a sparse matrix, or we run into a memory issue. So we create sparse matrices of the input features for both datasets. We also separate the response variables into vectors, as is required when using sparse matrices to build the particular models we'll be developing.
+
+```{r sparse_matrices}
+small_df_sparse_matrix <- small_df_tokens |>
     cast_sparse(ID, WORD, COUNT)
-sel <- c("ID", "LAB")
-labels <- large_df_tokens |>
+sel <- c("ID", "SENTIMENT")
+small_df_labels <- small_df_tokens |>
     select(all_of(sel)) |>
     distinct() |>
-    rename(EMOTION = LAB) |>
-    column_to_rownames(var = "ID") |>
-    as.matrix() |>
-    as("dgCMatrix")
-large_df_sparse_matrix <- cbind(large_df_sparse_matrix, labels)
-rm(labels)
+    column_to_rownames(var = "ID")
+small_df_y <- as.character(small_df_labels$SENTIMENT)
+large_df_sparse_matrix <- large_df_tokens |>
+    cast_sparse(ID, WORD, COUNT)
+sel <- c("ID", "EMOTION")
+large_df_labels <- large_df_tokens |>
+    select(all_of(sel)) |>
+    distinct() |>
+    column_to_rownames(var = "ID")
+large_df_y <- as.character(large_df_labels$EMOTION)
 
 ```
 
-The tokenization process has resulted in some observations having `NA` values for all recorded words in their datasets. This is because they were composed entirely of stopwords and/or numbers. These observations were automatically removed when working with the large dataset, so we will remove them from the small dataset as well.
+The tokenization process has resulted in some observations being removed from both datasets. This is because they were composed entirely of stopwords and/or numbers, and their removal is fine for our purposes. 
 
-```{r tokenization2}
-small_df <- small_df[rowSums(is.na(small_df)) == 0, ] 
+We split the data into training and test sets.
 
-```
-
-We split the datasets into a series of training and test sets so that we can later perform k-fold cross-validation when training our models.
-
-```{r }
+```{r train_test_split}
 set.seed(1006)
-sample_set <- createDataPartition(y = small_df$SENTIMENT, p = 0.75, list = FALSE)
-small_df_train <- small_df[sample_set, ]
-small_df_test <- small_df[-sample_set, ]
+sample_set <- sample(nrow(small_df_sparse_matrix),
+                     round(nrow(small_df_sparse_matrix) * 0.7),
+                     replace = FALSE)
+small_df_train_x <- small_df_sparse_matrix[sample_set, ]
+small_df_train_y <- small_df_y[sample_set]
+small_df_test_x <- small_df_sparse_matrix[-sample_set, ]
+small_df_test_y <- small_df_y[-sample_set]
+sample_set <- sample(nrow(large_df_sparse_matrix),
+                     round(nrow(large_df_sparse_matrix) * 0.7),
+                     replace = FALSE)
+large_df_train_x <- large_df_sparse_matrix[sample_set, ]
+large_df_train_y <- large_df_y[sample_set]
+large_df_test_x <- large_df_sparse_matrix[-sample_set, ]
+large_df_test_y <- large_df_y[-sample_set]
 
 ```
 
-Next, we train our models. 
+Next, we build our models. 
 
 ## Model Development
 
+First, we train Multinomial Naive Bayes Classifier models on both datasets.
+
 ```{r modeling1}
+mnb_mod_small <- multinomial_naive_bayes(small_df_train_x, small_df_train_y,
+                                  laplace = 1)
+mnb_mod_small
 
 ```
 
 ```{r modeling2}
+mnb_mod_large <- multinomial_naive_bayes(large_df_train_x, large_df_train_y,
+                                  laplace = 1)
+mnb_mod_large
+
+```
+
+Next, we train Extreme Gradient Boosting (XGBoost) models on both datasets. The classes of the response variable have to be numeric for these models, so we make those coercions first.
+
+```{r modeling3}
+small_df_train_y_num <- as.data.frame(small_df_train_y) |>
+    rename(SENTIMENT = small_df_train_y) |>
+    mutate(SENTIMENT = case_when(SENTIMENT == "negative" ~ 0,
+                                 SENTIMENT == "neutral" ~ 1,
+                                 .default = 2))
+small_df_train_y_num <- as.integer(small_df_train_y_num$SENTIMENT)
+small_df_test_y_num <- as.data.frame(small_df_test_y) |>
+    rename(SENTIMENT = small_df_test_y) |>
+    mutate(SENTIMENT = case_when(SENTIMENT == "negative" ~ 0,
+                                 SENTIMENT == "neutral" ~ 1,
+                                 .default = 2))
+small_df_test_y_num <- as.integer(small_df_test_y_num$SENTIMENT)
+xgb_mod_small <- xgboost(small_df_train_x, small_df_train_y_num, nrounds = 100,
+                         objective = "multi:softmax", num_class = 3,
+                         verbose = 0)
+xgb_mod_small
+
+```
+
+```{r modeling4}
+large_df_train_y_num <- as.data.frame(large_df_train_y) |>
+    rename(EMOTION = large_df_train_y) |>
+    mutate(EMOTION = case_when(EMOTION == "sadness" ~ 0,
+                               EMOTION == "joy" ~ 1,
+                               EMOTION == "love" ~ 2,
+                               EMOTION == "anger" ~ 3,
+                               EMOTION == "fear" ~ 4,
+                               .default = 5))
+large_df_train_y_num <- as.integer(large_df_train_y_num$EMOTION)
+large_df_test_y_num <- as.data.frame(large_df_test_y) |>
+    rename(EMOTION = large_df_test_y) |>
+    mutate(EMOTION = case_when(EMOTION == "sadness" ~ 0,
+                               EMOTION == "joy" ~ 1,
+                               EMOTION == "love" ~ 2,
+                               EMOTION == "anger" ~ 3,
+                               EMOTION == "fear" ~ 4,
+                               .default = 5))
+large_df_test_y_num <- as.integer(large_df_test_y_num$EMOTION)
+xgb_mod_large <- xgboost(large_df_train_x, large_df_train_y_num, nrounds = 100,
+                         objective = "multi:softmax", num_class = 6,
+                         verbose = 0)
+xgb_mod_large
 
 ```
 
 ## Model Selection
 
-## Final Evaluation
+We make predictions on the test data and construct confusion matrices for each of the models in order to calculate their predictive accuracy. 
+
+```{r selection1}
+mnb_pred_small <- predict(mnb_mod_small, small_df_test_x, type = "class")
+mnb_pred_tbl_small <- table(mnb_pred_small, small_df_test_y)
+names(dimnames(mnb_pred_tbl_small)) <- c("Prediction", "Reference")
+print("Confusion Matrix: Multinomial Naive Bayes Classifier: Small Test Data")
+mnb_pred_tbl_small
+
+```
+
+```{r selection2}
+xgb_pred_small <- predict(xgb_mod_small, small_df_test_x)
+xgb_pred_tbl_small <- table(xgb_pred_small, small_df_test_y_num)
+names(dimnames(xgb_pred_tbl_small)) <- c("Prediction", "Reference")
+sent <- c("negative", "neutral", "positive")
+dimnames(xgb_pred_tbl_small)$Prediction <- sent
+dimnames(xgb_pred_tbl_small)$Reference <- sent
+print("Confusion Matrix: XGBoost Model: Small Test Data")
+xgb_pred_tbl_small
+
+```
+
+```{r selection3}
+mnb_pred_large <- predict(mnb_mod_large, large_df_test_x, type = "class")
+mnb_pred_tbl_large <- table(mnb_pred_large, large_df_test_y)
+names(dimnames(mnb_pred_tbl_large)) <- c("Prediction", "Reference")
+print("Confusion Matrix: Multinomial Naive Bayes Classifier: Large Test Data")
+mnb_pred_tbl_large
+
+```
+
+```{r selection4}
+xgb_pred_large <- predict(xgb_mod_large, large_df_test_x)
+xgb_pred_tbl_large <- table(xgb_pred_large, large_df_test_y_num)
+names(dimnames(xgb_pred_tbl_large)) <- c("Prediction", "Reference")
+dimnames(xgb_pred_tbl_large)$Prediction <- emotions
+dimnames(xgb_pred_tbl_large)$Reference <- emotions
+print("Confusion Matrix: XGBoost Model: Large Test Data")
+xgb_pred_tbl_large
+
+```
+
+A summary of the models' predictive accuracy on each of the test datasets is below.
+
+```{r selection5}
+mnb_pred_acc_small <- sum(diag(mnb_pred_tbl_small)) / nrow(small_df_test_x)
+xgb_pred_acc_small <- sum(diag(xgb_pred_tbl_small)) / nrow(small_df_test_x)
+mnb_pred_acc_large <- sum(diag(mnb_pred_tbl_large)) / nrow(large_df_test_x)
+xgb_pred_acc_large <- sum(diag(xgb_pred_tbl_large)) / nrow(large_df_test_x)
+pred_acc_df <- as.data.frame(matrix(data = c(mnb_pred_acc_small,
+                                             xgb_pred_acc_small,
+                                             mnb_pred_acc_large,
+                                             xgb_pred_acc_large),
+                                    nrow = 2, ncol = 2))
+rownames(pred_acc_df) <- c("Multinomial Naive Bayes Classifier Model",
+                           "Extreme Gradient Boost (XGBoost) Model")
+colnames(pred_acc_df) <- c("Small Test Data Predictive Accuracy",
+                           "Large Test Data Predictive Accuracy")
+kable(pred_acc_df, format = "simple")
+
+```
+
+The Multinomial Naive Bayes Classifier has the highest predictive accuracy on the small test data, while the XGBoost Model has the highest predictive accuracy on the large test data.
 
 ## Conclusion
+
+Neither model performed particularly well on the small test data, but the Multinomial Naive Bayes Classifier was roughly 9% more accurate in its predictions than the XGBoost Model, making it the clear winner there.
+
+Unsurprisingly, both models benefited from having more training data. The jump in performance on the large test data was significant for both models, but the better performer here was the XGBoost Model rather than the Multinomial Naive Bayes Classifier. The former only beat the latter by roughly 2%, and the XGBoost Model was much more computationally expensive than the Multinomial Naive Bayes Classifier. So even though it was outperformed by the XGBoost Model, we were impressed by accuracy of the Multinomial Naive Bayes Classifier given its speed.

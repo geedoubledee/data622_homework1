@@ -14,6 +14,8 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r packages, warning = FALSE, message = FALSE}
 library(caret)
 library(DataExplorer)
+library(ggraph)
+library(igraph)
 library(knitr)
 library(Matrix)
 library(naivebayes)
@@ -23,6 +25,7 @@ library(scales)
 library(stopwords)
 library(tidytext)
 library(tidyverse)
+library(widyr)
 library(xgboost)
 
 ```
@@ -225,9 +228,53 @@ large_df_y <- as.character(large_df_labels$EMOTION)
 
 ```
 
-The tokenization process has resulted in some observations being removed from both datasets. This is because they were composed entirely of stopwords and/or numbers, and their removal is fine for our purposes. 
+The tokenization process has resulted in some observations being removed from both datasets. This is because they were composed entirely of stopwords and/or numbers, and their removal is fine for our purposes.
 
-We split the data into training and test sets.
+Now that we have all the word features we will be using as our input variables, we can check for pairwise correlations among them. Below is a graph featuring words in the small dataset that occur three or more times and have a pairwise correlation greater than 0.6. 
+
+```{r correlation1}
+small_df_cor <- small_df_tokens |>
+    group_by(WORD) |>
+    filter(n() >= 3) |>
+    pairwise_cor(WORD, ID, upper = FALSE)
+p3 <- small_df_cor |>
+    filter(correlation > .6) |>
+    graph_from_data_frame() |>
+    ggraph(layout = "fr") +
+    geom_edge_link(edge_color = palette1[8]) +
+    geom_node_point(color = palette1[3], size = 5) +
+    geom_node_text(aes(label = name), repel = TRUE) +
+    labs(title = "Words in Small Dataset Occurring 3+ Times with Pairwise Correlation > 0.6") +
+    theme_void()
+p3
+
+```
+
+We can see some logical correlations, like "final," "exam," and "semester" being correlated because they're words students would frequently use together. 
+
+Next is a graph featuring words in the large dataset that occur 50 or more times and have a pairwise correlation greater than 0.6. 
+
+```{r correlation2}
+large_df_cor <- large_df_tokens |>
+    group_by(WORD) |>
+    filter(n() >= 50) |>
+    pairwise_cor(WORD, ID, upper = FALSE) |>
+    filter(correlation > 0.6)
+p4 <- large_df_cor |>
+    graph_from_data_frame() |>
+    ggraph(layout = "fr") +
+    geom_edge_link(edge_color = palette1[8]) +
+    geom_node_point(color = palette1[3], size = 5) +
+    geom_node_text(aes(label = name), repel = TRUE) +
+    labs(title = "Words in Large Dataset Occurring 50+ Times with Pairwise Correlation > 0.6") +
+    theme_void()
+p4
+
+```
+
+The largest cluster here, as well as most of the other correlated words, all have to do with link text and are relatively uninteresting. One stand-out correlated  pair is "roller" and "coaster" though.
+
+Now we are ready to split the data into training and test sets.
 
 ```{r train_test_split}
 set.seed(1006)
@@ -248,7 +295,7 @@ large_df_test_y <- large_df_y[-sample_set]
 
 ```
 
-Next, we build our models. 
+Finally, we build our models. 
 
 ## Model Development
 
